@@ -8,11 +8,11 @@ import Elm.Syntax.Pattern exposing (Pattern(..))
 import Node.Extra
 
 
-fromExpression : Expression -> Maybe String
-fromExpression e =
+fromExpression : Node Expression -> Maybe (Node String)
+fromExpression (Node range e) =
     case e of
         FunctionOrValue [] name ->
-            Just name
+            Just (Node range name)
 
         _ ->
             Nothing

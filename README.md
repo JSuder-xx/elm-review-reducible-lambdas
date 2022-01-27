@@ -1,10 +1,15 @@
 # elm-review-reducible-lambdas
 
-Provides [`elm-review`](https://package.elm-lang.org/packages/jfmengels/elm-review/latest/) rules to REPLACEME.
+Provides [`elm-review`](https://package.elm-lang.org/packages/jfmengels/elm-review/latest/) rules to detect reducible lambda expressions using different techniques.
 
 ## Provided rules
 
-- [`NoEtaReducibleLambdas`](https://package.elm-lang.org/packages/jsuder-xx/elm-review-reducible-lambdas/1.0.0/NoEtaReducibleLambdas) - Reports REPLACEME.
+- [`NoEtaReducibleLambdas`](https://package.elm-lang.org/packages/jsuder-xx/elm-review-reducible-lambdas/1.0.0/NoEtaReducibleLambdas) - Reports when arguments can be removed
+from a lambda through the process of Eta Reduction (part of the lambda calculus). For example, the following reductions are possible
+  - `\x -> f x` reduces to `f`
+  - `\x y -> f x y` reduces to `f`
+  - `\x -> f a x` reduces to `f a`
+  - `\a b -> f (g a) b` reduces to `\a -> f (g a)`
 
 ## Configuration
 
@@ -19,7 +24,6 @@ config =
     [ NoEtaReducibleLambdas.rule
     ]
 ```
-
 
 ## Try it out
 

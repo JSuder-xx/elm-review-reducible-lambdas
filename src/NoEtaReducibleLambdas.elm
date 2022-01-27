@@ -1,10 +1,15 @@
-module NoEtaReducibleLambdas exposing (rule)
+module NoEtaReducibleLambdas exposing
+    ( rule
+    , canReduceFunctionArguments, canReduceToJustFunctionApplication
+    )
 
 {-|
 
 @docs rule
 
 -}
+
+-- import Review.Fix exposing (Fix)
 
 import Dict
 import Elm.Syntax.Declaration exposing (Declaration(..))
@@ -13,7 +18,8 @@ import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Range exposing (Range)
 import Ra
-import Review.Fix exposing (Fix)
+import Range.Extra exposing (expandToLeft, expandToRight, toTheLeft)
+import Review.Fix as Fix
 import Review.Rule as Rule exposing (Rule)
 import VariableName
 
@@ -78,30 +84,60 @@ nodeValues =
     List.map Node.value
 
 
-varPattern : Pattern -> Maybe String
-varPattern p =
+varPattern : Node Pattern -> Maybe (Node String)
+varPattern (Node range p) =
     case p of
         VarPattern v ->
-            Just v
+            Just (Node range v)
 
         _ ->
             Nothing
 
 
-errorsInExpression : String -> Errors -> Node Expression -> Errors
-errorsInExpression functionName initialErrors =
-    let
-        errorsInApplicationOfLambda : Range -> Errors -> List Pattern -> List Expression -> List (Rule.Error {})
-        errorsInApplicationOfLambda range acc arguments expressions =
+canReduceToJustFunctionApplication : { message : String, details : List String }
+canReduceToJustFunctionApplication =
+    { message = "This lambda can be replaced entirely with a function application."
+    , details =
+        [ "This lambda can be refactored to just the function itself through identity."
+        ]
+    }
+
+
+canReduceFunctionArguments : { message : String, details : List String }
+canReduceFunctionArguments =
+    { message = "Arguments can be removed from this lambda and the function application."
+    , details = [ "Arguments can be removed." ]
+    }
+
+
+removeWithLeadingSpace : Range -> Fix.Fix
+removeWithLeadingSpace =
+    expandToLeft 1 >> Fix.removeRange
+
+
+removeParameterAndExpressionFixes : ( Node a, Node b ) -> List Fix.Fix
+removeParameterAndExpressionFixes ( Node patternRange _, Node expressionRange _ ) =
+    [ removeWithLeadingSpace patternRange
+    , removeWithLeadingSpace expressionRange
+    ]
+
+
+errorsInApplicationOfLambda : String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
+errorsInApplicationOfLambda inDeclaredFunctionName range existingErrors arguments expressions =
+    case expressions of
+        [] ->
+            []
+
+        functionExpression :: _ ->
             let
                 variableCounts =
-                    VariableName.countInExpressions expressions Dict.empty
+                    VariableName.countInExpressions (nodeValues expressions) Dict.empty
 
                 countOf name =
                     Dict.get name variableCounts
                         |> Maybe.withDefault 0
 
-                ( canBeRemoved, mustBeRetained ) =
+                ( removable, retainable ) =
                     List.map2
                         Tuple.pair
                         (List.reverse arguments)
@@ -109,83 +145,113 @@ errorsInExpression functionName initialErrors =
                         |> Ra.partitionWhile
                             (\( argumentPattern, expression ) ->
                                 Maybe.map2
-                                    (\argumentName variableName -> argumentName == variableName && countOf variableName <= 1)
+                                    (\argumentName variableName -> Node.value argumentName == Node.value variableName && countOf (Node.value variableName) <= 1)
                                     (varPattern argumentPattern)
                                     (VariableName.fromExpression expression)
                                     |> Maybe.withDefault False
                             )
 
                 mustKeepLambda =
-                    expressions
-                        |> List.head
-                        |> Maybe.andThen VariableName.fromExpression
-                        |> Maybe.map ((==) functionName)
+                    functionExpression
+                        |> VariableName.fromExpression
+                        |> Maybe.map Node.value
+                        |> Maybe.map ((==) inDeclaredFunctionName)
                         |> Maybe.withDefault False
+
+                ( canBeRemoved, mustBeRetained ) =
+                    if mustKeepLambda && List.isEmpty retainable then
+                        case List.reverse removable of
+                            [] ->
+                                ( removable, retainable )
+
+                            last :: rest ->
+                                ( List.reverse rest, [ last ] )
+
+                    else
+                        ( removable, retainable )
             in
             if List.isEmpty canBeRemoved then
-                acc
+                existingErrors
 
-            else if List.isEmpty mustBeRetained && not mustKeepLambda then
-                -- we can reduce all the way down to just the function expression
-                Rule.errorWithFix { message = "You can reduce to just a function", details = [ "x" ] } range [] :: acc
+            else if List.isEmpty mustBeRetained then
+                Rule.errorWithFix
+                    canReduceToJustFunctionApplication
+                    range
+                    (Fix.removeRange (functionExpression |> Node.range |> toTheLeft { delta = 0, count = 4 })
+                        :: List.concatMap
+                            removeParameterAndExpressionFixes
+                            canBeRemoved
+                    )
+                    :: existingErrors
 
             else
-                -- we can reduce many of the arguments
-                Rule.errorWithFix { message = "You can reduce", details = [ "x" ] } range [] :: acc
+                Rule.errorWithFix
+                    canReduceFunctionArguments
+                    range
+                    (List.concatMap
+                        removeParameterAndExpressionFixes
+                        canBeRemoved
+                    )
+                    :: existingErrors
 
+
+errorsInExpression : String -> Errors -> Node Expression -> Errors
+errorsInExpression functionName initialErrors =
+    let
         letDeclaration : Node LetDeclaration -> Errors -> Errors
-        letDeclaration decl errorsSoFar =
+        letDeclaration decl accumulatedErrors =
             case Node.value decl of
                 LetFunction { declaration } ->
-                    errorsInFunctionImplementation declaration errorsSoFar
+                    errorsInFunctionImplementation declaration accumulatedErrors
 
                 LetDestructuring _ expr ->
-                    expressionRecurse errorsSoFar expr
+                    expressionRecurse accumulatedErrors expr
 
-        expressionRecurse acc expr =
+        expressionRecurse : Errors -> Node Expression -> Errors
+        expressionRecurse accumulatedErrors expr =
             let
                 expressionsRecurse =
-                    List.foldl (Ra.flip expressionRecurse) acc
+                    List.foldl (Ra.flip expressionRecurse) accumulatedErrors
             in
             case Node.value expr of
                 -- ------------------------------------------------------
                 -- Return Immediately
                 -- ------------------------------------------------------
                 UnitExpr ->
-                    acc
+                    accumulatedErrors
 
                 FunctionOrValue _ _ ->
-                    acc
+                    accumulatedErrors
 
                 PrefixOperator _ ->
-                    acc
+                    accumulatedErrors
 
                 Operator _ ->
-                    acc
+                    accumulatedErrors
 
                 Integer _ ->
-                    acc
+                    accumulatedErrors
 
                 Hex _ ->
-                    acc
+                    accumulatedErrors
 
                 Floatable _ ->
-                    acc
+                    accumulatedErrors
 
                 Negation _ ->
-                    acc
+                    accumulatedErrors
 
                 Literal _ ->
-                    acc
+                    accumulatedErrors
 
                 CharLiteral _ ->
-                    acc
+                    accumulatedErrors
 
                 RecordAccessFunction _ ->
-                    acc
+                    accumulatedErrors
 
                 GLSLExpression _ ->
-                    acc
+                    accumulatedErrors
 
                 -- ------------------------------------------------------
                 -- Recurse Only
@@ -206,7 +272,7 @@ errorsInExpression functionName initialErrors =
                     expressionsRecurse [ e ]
 
                 LetExpression { declarations, expression } ->
-                    expressionRecurse (declarations |> List.foldl letDeclaration acc) expression
+                    expressionRecurse (declarations |> List.foldl letDeclaration accumulatedErrors) expression
 
                 CaseExpression { cases, expression } ->
                     expressionsRecurse (expression :: (cases |> List.map Tuple.second))
@@ -225,7 +291,7 @@ errorsInExpression functionName initialErrors =
                     expressionsRecurse exprs
 
                 RecordAccess e _ ->
-                    expressionRecurse acc e
+                    expressionRecurse accumulatedErrors e
 
                 -- ------------------------------------------------------
                 -- Actually Do the Thing!!!
@@ -235,8 +301,16 @@ errorsInExpression functionName initialErrors =
                         (expression
                             |> Node.value
                             |> functionApplication
-                            |> Maybe.map (\applications -> errorsInApplicationOfLambda (Node.range expr) acc (nodeValues args) (applications |> nodeValues))
-                            |> Maybe.withDefault acc
+                            |> Maybe.map
+                                (\applications ->
+                                    errorsInApplicationOfLambda
+                                        functionName
+                                        (Node.range expr)
+                                        accumulatedErrors
+                                        args
+                                        applications
+                                )
+                            |> Maybe.withDefault accumulatedErrors
                         )
                         expression
     in
@@ -244,12 +318,12 @@ errorsInExpression functionName initialErrors =
 
 
 errorsInFunctionImplementation : Node FunctionImplementation -> Errors -> Errors
-errorsInFunctionImplementation declaration errors =
+errorsInFunctionImplementation declaration accumulatedErrors =
     let
         { name, expression } =
             Node.value declaration
     in
-    errorsInExpression (Node.value name) errors expression
+    errorsInExpression (Node.value name) accumulatedErrors expression
 
 
 errorsInDeclaration : Node Declaration -> Errors
