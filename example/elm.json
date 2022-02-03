@@ -10,7 +10,8 @@
             "elm-community/list-extra": "8.5.2",
             "jfmengels/elm-review": "2.4.0",
             "jsuder-xx/elm-ra": "1.1.1",
-            "stil4m/elm-syntax": "7.2.1"
+            "stil4m/elm-syntax": "7.2.1",
+            "jsuder-xx/elm-review-reducible-lambdas": "1.0.2"
         },
         "indirect": {
         }
