@@ -6,6 +6,7 @@ module NoEtaReducibleLambdas exposing
 {-| Provides [`elm-review`](https://package.elm-lang.org/packages/jfmengels/elm-review/latest/) rules to detect reducible lambda expressions using different techniques.
 
 @docs rule, LambdaReduceStrategy
+@docs canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
 
 -}
 
@@ -159,15 +160,17 @@ type alias ErrorMessage =
     { message : String, details : List String }
 
 
-{-| -}
+{-| Error message when arguments can be removed (for unit testing only).
+-}
 canRemoveSomeArguments : ErrorMessage
 canRemoveSomeArguments =
     { message = "Arguments can be removed from this lambda."
-    , details = [ "Arguments can be removed through the process of eta reduction without changing the meaning or the performance attributes." ]
+    , details = [ "Arguments can be removed through the process of eta reduction." ]
     }
 
 
-{-| -}
+{-| Error message when the lambda can be removed (for unit testing only).
+-}
 canRemoveLambda : ErrorMessage
 canRemoveLambda =
     { message = "Lambda can be removed"
@@ -175,11 +178,12 @@ canRemoveLambda =
     }
 
 
-{-| -}
+{-| Error message when the lambda reduces to identity (for unit testing only).
+-}
 reducesToIdentity : ErrorMessage
 reducesToIdentity =
     { message = "This lambda is actually reducible to just the identity function."
-    , details = [ "Just do it." ]
+    , details = [ "After eta reduction this function finally reduced down to something of the form `\\a -> a`." ]
     }
 
 
