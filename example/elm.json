@@ -1,0 +1,22 @@
+{
+    "type": "application",
+    "source-directories": [
+        "src"
+    ],
+    "elm-version": "0.19.1",
+    "dependencies": {
+        "direct": {
+            "elm/core": "1.0.5",
+            "elm-community/list-extra": "8.5.2",
+            "jfmengels/elm-review": "2.4.0",
+            "jsuder-xx/elm-ra": "1.1.1",
+            "stil4m/elm-syntax": "7.2.1"
+        },
+        "indirect": {
+        }
+    },
+    "test-dependencies": {
+        "direct": {},
+        "indirect": {}
+    }
+}
