@@ -21,7 +21,7 @@ import Review.Rule exposing (Rule)
 
 config : List Rule
 config =
-    [ NoEtaReducibleLambdas.rule
+    [ NoEtaReducibleLambdas.rule NoEtaReducibleLambdas.AlwaysRemoveLambdaWhenPossible
     ]
 ```
 

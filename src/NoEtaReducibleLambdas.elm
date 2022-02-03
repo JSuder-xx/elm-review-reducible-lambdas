@@ -1,6 +1,6 @@
 module NoEtaReducibleLambdas exposing
     ( rule
-    , canReduceFunctionArguments, canReduceToJustFunctionApplication
+    , LambdaReduceStrategy(..), canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
     )
 
 {-|
@@ -18,35 +18,58 @@ import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Range exposing (Range)
 import Ra
-import Range.Extra exposing (expandToLeft, expandToRight, toTheLeft)
+import Range.Extra
 import Review.Fix as Fix
 import Review.Rule as Rule exposing (Rule)
+import Set exposing (Set)
 import VariableName
 
 
-{-| Reports... REPLACEME
+type LambdaReduceStrategy
+    = RemoveLambdaWhenNoCallsInApplication
+    | OnlySingleArguments
+    | AlwaysRemoveLambdaWhenPossible
+
+
+{-|
 
     config =
-        [ NoEtaReducibleLambdas.rule
+        [ NoEtaReducibleLambdas.rule AlwaysRemoveLambdaWhenPossible
         ]
 
 
 ## Fail
 
     a =
-        "REPLACEME example to replace"
+        List.map (\a -> f a)
 
 
 ## Success
 
     a =
-        "REPLACEME example to replace"
+        List.map f
 
 
 ## When (not) to enable this rule
 
-This rule is useful when REPLACEME.
-This rule is not useful when REPLACEME.
+This rule can change the performance characteristics of your program.
+
+  - Reducing `\\a b -> f a b` to `f`
+      - If `f` does work on first argument
+      - Then this modification will cause that work to be done immediately on first application
+      - Whereas behind the lambda it would wait until the second argument.
+
+  - Reducing `\\a b -> f g a b` to `f g`
+      - Causes an immediate application but no computation on arguments.
+      - If `f` does work on first argument
+      - Then this will cause that work to be done **immediately** at this location
+      - And if `f` does work on second argument
+      - Then this reduction will cause this work to be done on application of second argument.
+      - Whereas behind this lambda the application of `g` and `a` to `f` would wait until `b` had been applied.
+
+  - Reducing `\\a b -> f (g 10) a b` to `f (g 10)`
+      - Causes `g 10` to evaluate immediately which could be costly
+      - In addition to every other change indicated in the prior reduction example.
 
 
 ## Try it out
@@ -58,10 +81,10 @@ elm-review --template jsuder-xx/elm-review-eta-reduction/example --rules NoEtaRe
 ```
 
 -}
-rule : Rule
-rule =
+rule : LambdaReduceStrategy -> Rule
+rule strategy =
     Rule.newModuleRuleSchema "NoEtaReducibleLambdas" ()
-        |> Rule.withDeclarationEnterVisitor (\decl context -> ( errorsInDeclaration decl, context ))
+        |> Rule.withDeclarationEnterVisitor (\decl context -> ( errorsInDeclaration strategy decl, context ))
         |> Rule.fromModuleRuleSchema
 
 
@@ -94,25 +117,34 @@ varPattern (Node range p) =
             Nothing
 
 
-canReduceToJustFunctionApplication : { message : String, details : List String }
-canReduceToJustFunctionApplication =
-    { message = "This lambda can be replaced entirely with a function application."
-    , details =
-        [ "This lambda can be refactored to just the function itself through identity."
-        ]
+type alias ErrorMessage =
+    { message : String, details : List String }
+
+
+canRemoveSomeArguments : ErrorMessage
+canRemoveSomeArguments =
+    { message = "Arguments can be removed from this lambda."
+    , details = [ "Arguments can be removed through the process of eta reduction without changing the meaning or the performance attributes." ]
     }
 
 
-canReduceFunctionArguments : { message : String, details : List String }
-canReduceFunctionArguments =
-    { message = "Arguments can be removed from this lambda and the function application."
-    , details = [ "Arguments can be removed." ]
+canRemoveLambda : ErrorMessage
+canRemoveLambda =
+    { message = "Lambda can be removed"
+    , details = [ "The meaning of the code remains the same even when the lambda is removed." ]
+    }
+
+
+reducesToIdentity : ErrorMessage
+reducesToIdentity =
+    { message = "This lambda is actually reducible to just the identity function."
+    , details = [ "Just do it." ]
     }
 
 
 removeWithLeadingSpace : Range -> Fix.Fix
 removeWithLeadingSpace =
-    expandToLeft 1 >> Fix.removeRange
+    Range.Extra.expandToLeft 1 >> Fix.removeRange
 
 
 removeParameterAndExpressionFixes : ( Node a, Node b ) -> List Fix.Fix
@@ -122,8 +154,8 @@ removeParameterAndExpressionFixes ( Node patternRange _, Node expressionRange _ 
     ]
 
 
-errorsInApplicationOfLambda : String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
-errorsInApplicationOfLambda inDeclaredFunctionName range existingErrors arguments expressions =
+errorsInApplicationOfLambda : LambdaReduceStrategy -> Set String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
+errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErrors arguments expressions =
     case expressions of
         [] ->
             []
@@ -151,12 +183,24 @@ errorsInApplicationOfLambda inDeclaredFunctionName range existingErrors argument
                                     |> Maybe.withDefault False
                             )
 
+                anyReferenceToOuterDeclaredValue _ =
+                    valueNameSet
+                        |> Set.toList
+                        |> List.any (countOf >> Ra.greaterThan 0)
+
+                anyExpressionIncludesApplication _ =
+                    expressions |> List.any expessionIncludesApplicationNotBehindLambda
+
                 mustKeepLambda =
-                    functionExpression
-                        |> VariableName.fromExpression
-                        |> Maybe.map Node.value
-                        |> Maybe.map ((==) inDeclaredFunctionName)
-                        |> Maybe.withDefault False
+                    case lambdaReduceStrategy of
+                        AlwaysRemoveLambdaWhenPossible ->
+                            anyReferenceToOuterDeclaredValue ()
+
+                        RemoveLambdaWhenNoCallsInApplication ->
+                            anyReferenceToOuterDeclaredValue () || anyExpressionIncludesApplication ()
+
+                        OnlySingleArguments ->
+                            anyReferenceToOuterDeclaredValue () || anyExpressionIncludesApplication ()
 
                 ( canBeRemoved, mustBeRetained ) =
                     if mustKeepLambda && List.isEmpty retainable then
@@ -169,24 +213,54 @@ errorsInApplicationOfLambda inDeclaredFunctionName range existingErrors argument
 
                     else
                         ( removable, retainable )
+
+                tooManyArguments =
+                    case lambdaReduceStrategy of
+                        AlwaysRemoveLambdaWhenPossible ->
+                            False
+
+                        RemoveLambdaWhenNoCallsInApplication ->
+                            False
+
+                        OnlySingleArguments ->
+                            List.length arguments > 1
             in
-            if List.isEmpty canBeRemoved then
+            if List.isEmpty canBeRemoved || tooManyArguments then
                 existingErrors
 
             else if List.isEmpty mustBeRetained then
-                Rule.errorWithFix
-                    canReduceToJustFunctionApplication
-                    range
-                    (Fix.removeRange (functionExpression |> Node.range |> toTheLeft { delta = 0, count = 4 })
-                        :: List.concatMap
-                            removeParameterAndExpressionFixes
-                            canBeRemoved
-                    )
-                    :: existingErrors
+                if List.length arguments == List.length expressions then
+                    case ( List.head arguments, expressions |> List.reverse |> List.head ) of
+                        ( Just (Node first _), Just (Node last _) ) ->
+                            let
+                                newRange =
+                                    { start = { row = first.start.row, column = first.start.column - 1 }
+                                    , end = last.end
+                                    }
+                            in
+                            Rule.errorWithFix
+                                reducesToIdentity
+                                newRange
+                                [ Fix.replaceRangeBy newRange "identity" ]
+                                :: existingErrors
+
+                        _ ->
+                            existingErrors
+
+                else
+                    Rule.errorWithFix
+                        canRemoveLambda
+                        range
+                        (Fix.removeRange (functionExpression |> Node.range |> Range.Extra.toTheLeft { delta = 0, count = 4 })
+                            :: List.concatMap
+                                removeParameterAndExpressionFixes
+                                canBeRemoved
+                        )
+                        :: existingErrors
 
             else
                 Rule.errorWithFix
-                    canReduceFunctionArguments
+                    canRemoveSomeArguments
                     range
                     (List.concatMap
                         removeParameterAndExpressionFixes
@@ -195,14 +269,126 @@ errorsInApplicationOfLambda inDeclaredFunctionName range existingErrors argument
                     :: existingErrors
 
 
-errorsInExpression : String -> Errors -> Node Expression -> Errors
-errorsInExpression functionName initialErrors =
+expessionIncludesApplicationNotBehindLambda : Node Expression -> Bool
+expessionIncludesApplicationNotBehindLambda expr =
+    let
+        letDeclaration : Node LetDeclaration -> Bool
+        letDeclaration decl =
+            case Node.value decl of
+                LetFunction { declaration } ->
+                    let
+                        { arguments, expression } =
+                            Node.value declaration
+                    in
+                    if List.isEmpty arguments then
+                        -- if there are no arguments then we have to see if this expression is going to call something
+                        expessionIncludesApplicationNotBehindLambda expression
+
+                    else
+                        -- if there are arguments then the expression is behind a lambda
+                        False
+
+                LetDestructuring _ e ->
+                    expessionIncludesApplicationNotBehindLambda e
+
+        expressionsRecurse =
+            List.any expessionIncludesApplicationNotBehindLambda
+    in
+    case Node.value expr of
+        -- ----------------------------------------------------
+        -- Immediately False
+        -- ----------------------------------------------------
+        UnitExpr ->
+            False
+
+        FunctionOrValue _ _ ->
+            False
+
+        PrefixOperator _ ->
+            False
+
+        Operator _ ->
+            False
+
+        Integer _ ->
+            False
+
+        Hex _ ->
+            False
+
+        Floatable _ ->
+            False
+
+        Literal _ ->
+            False
+
+        CharLiteral _ ->
+            False
+
+        RecordAccessFunction _ ->
+            False
+
+        GLSLExpression _ ->
+            False
+
+        LambdaExpression _ ->
+            False
+
+        -- ----------------------------------------------------
+        -- Immediately True
+        -- ----------------------------------------------------
+        Application _ ->
+            True
+
+        -- ----------------------------------------------------
+        -- Recurse
+        -- ----------------------------------------------------
+        Negation inner ->
+            expessionIncludesApplicationNotBehindLambda inner
+
+        OperatorApplication _ _ l r ->
+            expressionsRecurse [ l, r ]
+
+        IfBlock c t f ->
+            expressionsRecurse [ c, t, f ]
+
+        TupledExpression exprs ->
+            expressionsRecurse exprs
+
+        ParenthesizedExpression e ->
+            expressionsRecurse [ e ]
+
+        LetExpression { declarations, expression } ->
+            (declarations |> List.any letDeclaration) || expessionIncludesApplicationNotBehindLambda expression
+
+        CaseExpression { cases, expression } ->
+            expressionsRecurse (expression :: (cases |> List.map Tuple.second))
+
+        RecordExpr setters ->
+            setters
+                |> List.map (Node.value >> Tuple.second)
+                |> expressionsRecurse
+
+        RecordUpdateExpression _ setters ->
+            setters
+                |> List.map (Node.value >> Tuple.second)
+                |> expressionsRecurse
+
+        ListExpr exprs ->
+            expressionsRecurse exprs
+
+        RecordAccess e _ ->
+            expessionIncludesApplicationNotBehindLambda e
+
+
+errorsInExpression : LambdaReduceStrategy -> Set.Set String -> Errors -> Node Expression -> Errors
+errorsInExpression lambdaReduceStrategy valueNameSet initialErrors =
     let
         letDeclaration : Node LetDeclaration -> Errors -> Errors
         letDeclaration decl accumulatedErrors =
             case Node.value decl of
                 LetFunction { declaration } ->
-                    errorsInFunctionImplementation declaration accumulatedErrors
+                    errorsInFunctionImplementation lambdaReduceStrategy valueNameSet declaration accumulatedErrors
 
                 LetDestructuring _ expr ->
                     expressionRecurse accumulatedErrors expr
@@ -238,8 +424,8 @@ errorsInExpression functionName initialErrors =
                 Floatable _ ->
                     accumulatedErrors
 
-                Negation _ ->
-                    accumulatedErrors
+                Negation inner ->
+                    expressionRecurse accumulatedErrors inner
 
                 Literal _ ->
                     accumulatedErrors
@@ -304,7 +490,8 @@ errorsInExpression functionName initialErrors =
                             |> Maybe.map
                                 (\applications ->
                                     errorsInApplicationOfLambda
-                                        functionName
+                                        lambdaReduceStrategy
+                                        valueNameSet
                                         (Node.range expr)
                                         accumulatedErrors
                                         args
@@ -317,23 +504,34 @@ errorsInExpression functionName initialErrors =
     expressionRecurse initialErrors
 
 
-errorsInFunctionImplementation : Node FunctionImplementation -> Errors -> Errors
-errorsInFunctionImplementation declaration accumulatedErrors =
+errorsInFunctionImplementation : LambdaReduceStrategy -> Set String -> Node FunctionImplementation -> Errors -> Errors
+errorsInFunctionImplementation lambdaReduceStrategy valueNameSet declaration accumulatedErrors =
     let
-        { name, expression } =
+        { name, expression, arguments } =
             Node.value declaration
     in
-    errorsInExpression (Node.value name) accumulatedErrors expression
+    errorsInExpression
+        lambdaReduceStrategy
+        ((if List.isEmpty arguments then
+            name |> Node.value |> Set.insert
+
+          else
+            identity
+         )
+            valueNameSet
+        )
+        accumulatedErrors
+        expression
 
 
-errorsInDeclaration : Node Declaration -> Errors
-errorsInDeclaration (Node _ decl) =
+errorsInDeclaration : LambdaReduceStrategy -> Node Declaration -> Errors
+errorsInDeclaration lambdaReduceStrategy (Node _ decl) =
     case decl of
         CustomTypeDeclaration _ ->
             []
 
         FunctionDeclaration { declaration } ->
-            errorsInFunctionImplementation declaration []
+            errorsInFunctionImplementation lambdaReduceStrategy Set.empty declaration []
 
         AliasDeclaration _ ->
             []

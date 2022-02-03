@@ -11,7 +11,7 @@ import Node.Extra
 fromExpression : Node Expression -> Maybe (Node String)
 fromExpression (Node range e) =
     case e of
-        FunctionOrValue [] name ->
+        FunctionOrValue _ name ->
             Just (Node range name)
 
         _ ->
@@ -57,7 +57,7 @@ countInExpression =
                     countInExpressions (exprs |> Node.Extra.values) acc
             in
             case expr of
-                FunctionOrValue [] name ->
+                FunctionOrValue _ name ->
                     Dict.update
                         name
                         (\maybeCount ->
@@ -69,9 +69,6 @@ countInExpression =
                                     Just (existing + 1)
                         )
                         acc
-
-                FunctionOrValue _ _ ->
-                    acc
 
                 UnitExpr ->
                     acc
