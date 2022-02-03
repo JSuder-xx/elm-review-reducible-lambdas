@@ -74,8 +74,9 @@ sourceCode =
     (::) "module A exposing (..)" >> String.join "\n"
 
 
+allConfigs : List LambdaReduceStrategy
 allConfigs =
-    [ AlwaysRemoveLambdaWhenPossible, RemoveLambdaWhenNoCallsInApplication, OnlySingleArguments ]
+    [ AlwaysRemoveLambdaWhenPossible, RemoveLambdaWhenNoCallsInApplication, OnlyWhenSingleArgument ]
 
 
 all : Test
@@ -86,7 +87,7 @@ all =
                 [ [ AlwaysRemoveLambdaWhenPossible, RemoveLambdaWhenNoCallsInApplication ]
                     |> List.map
                         (expectCanRemoveSomeArguments
-                            { description = "arguments can be removed"
+                            { description = "arguments can be removed but the lambda cannot because of value recursion"
                             , source =
                                 [ "f ="
                                 , "    (\\a b -> f a b)"
@@ -104,14 +105,38 @@ all =
                         (expectCanRemoveLambda
                             { description = "can reduce to function outright"
                             , source =
-                                [ "f x ="
-                                , "    (\\a b -> f a b)"
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            \\a b -> f a b"
+                                , "    in"
+                                , "    g x y"
                                 ]
                             }
                             { under = "\\a b -> f a b"
                             , newSource =
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            f"
+                                , "    in"
+                                , "    g x y"
+                                ]
+                            }
+                        )
+                , [ OnlyWhenSingleArgument ]
+                    |> List.map
+                        (expectCanRemoveLambda
+                            { description = "can reduce a single argument"
+                            , source =
                                 [ "f x ="
-                                , "    (f)"
+                                , "    (\\a -> g a)"
+                                ]
+                            }
+                            { under = "\\a -> g a"
+                            , newSource =
+                                [ "f x ="
+                                , "    (g)"
                                 ]
                             }
                         )
@@ -368,12 +393,12 @@ all =
                         [ "f a ="
                         , "  (\\x y -> g x y)"
                         ]
-                        OnlySingleArguments
+                        OnlyWhenSingleArgument
                   , expectNoErrorWhen "Multiple arguments (with one application) and configured to only work with single arguments"
                         [ "f a ="
                         , "  (\\x y -> g (x 10) y)"
                         ]
-                        OnlySingleArguments
+                        OnlyWhenSingleArgument
                   ]
                 ]
         ]

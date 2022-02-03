@@ -1,15 +1,13 @@
 module NoEtaReducibleLambdas exposing
-    ( rule
-    , LambdaReduceStrategy(..), canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
+    ( rule, LambdaReduceStrategy(..)
+    , canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
     )
 
-{-|
+{-| Provides [`elm-review`](https://package.elm-lang.org/packages/jfmengels/elm-review/latest/) rules to detect reducible lambda expressions using different techniques.
 
-@docs rule
+@docs rule, LambdaReduceStrategy
 
 -}
-
--- import Review.Fix exposing (Fix)
 
 import Dict
 import Elm.Syntax.Declaration exposing (Declaration(..))
@@ -25,34 +23,61 @@ import Set exposing (Set)
 import VariableName
 
 
+{-| Use these to control how aggressively lambda expressions are reduced.
+
+  - OnlyWhenSingleArgument has the least impact on performance and will reduce the least.
+      - This will reduce `\a -> f a` to `f`.
+      - It will not reduce `\a -> (getFunction 10) a` because there is a function application to get the function.
+
+  - RemoveLambdaWhenNoCallsInApplication should have minimal impact on performance and reduces most of the functions you would want to reduce.
+      - This will reduce `\a -> f a` to `f`.
+      - This will reduce `\a b -> f a b` to `f`.
+      - This will reduce `\a b -> f [1, 2, 3] a b` to `f [1, 2, 3]`
+      - This will reduce `\a b -> f (g 10) a b` to `\a -> f (g 10) a` but it will not remove the lambda outright because of the `(g 10)` call.
+      - This will reduce `\a b c -> a b c` to `identity`.
+      - This will **not** reduce `\a -> f (g 10) a` due to the `(g 10)` call.
+
+  - AlwaysRemoveLambdaWhenPossible is the most aggressive.
+      - This will reduce `\a -> f a` to `f`.
+      - This will reduce `\a b -> f a b` to `f`.
+      - This will reduce `\a b -> f [1, 2, 3] a b` to `f [1, 2, 3]`
+      - This will reduce `\a b -> f (g 10) a b` to `f (g 10)`.
+      - This will reduce `\a b c -> a b c` to `identity`.
+      - This will reduce `\a -> (getFunction 10) a` to `(getFunction 10)`.
+
+See the module documentation.
+
+-}
 type LambdaReduceStrategy
     = RemoveLambdaWhenNoCallsInApplication
-    | OnlySingleArguments
+    | OnlyWhenSingleArgument
     | AlwaysRemoveLambdaWhenPossible
 
 
-{-|
-
-    config =
-        [ NoEtaReducibleLambdas.rule AlwaysRemoveLambdaWhenPossible
-        ]
+{-| This rule detect reducible lambda expressions using different techniques.
 
 
 ## Fail
 
-    a =
+    example1 =
         List.map (\a -> f a)
+
+    example2 =
+        List.map (\a -> f (g 10) a)
 
 
 ## Success
 
-    a =
+    example1 =
         List.map f
+
+    example2 =
+        List.map (f (g 10))
 
 
 ## When (not) to enable this rule
 
-This rule can change the performance characteristics of your program.
+This rule can change the performance characteristics of your program which is why LambdaReduceStrategy offers different levels of reduction.
 
   - Reducing `\\a b -> f a b` to `f`
       - If `f` does work on first argument
@@ -70,6 +95,19 @@ This rule can change the performance characteristics of your program.
   - Reducing `\\a b -> f (g 10) a b` to `f (g 10)`
       - Causes `g 10` to evaluate immediately which could be costly
       - In addition to every other change indicated in the prior reduction example.
+
+
+## Configuration
+
+    module ReviewConfig exposing (config)
+
+    import NoEtaReducibleLambdas
+    import Review.Rule exposing (Rule)
+
+    config : List Rule
+    config =
+        [ NoEtaReducibleLambdas.rule NoEtaReducibleLambdas.AlwaysRemoveLambdaWhenPossible
+        ]
 
 
 ## Try it out
@@ -121,6 +159,7 @@ type alias ErrorMessage =
     { message : String, details : List String }
 
 
+{-| -}
 canRemoveSomeArguments : ErrorMessage
 canRemoveSomeArguments =
     { message = "Arguments can be removed from this lambda."
@@ -128,6 +167,7 @@ canRemoveSomeArguments =
     }
 
 
+{-| -}
 canRemoveLambda : ErrorMessage
 canRemoveLambda =
     { message = "Lambda can be removed"
@@ -135,6 +175,7 @@ canRemoveLambda =
     }
 
 
+{-| -}
 reducesToIdentity : ErrorMessage
 reducesToIdentity =
     { message = "This lambda is actually reducible to just the identity function."
@@ -199,7 +240,7 @@ errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErro
                         RemoveLambdaWhenNoCallsInApplication ->
                             anyReferenceToOuterDeclaredValue () || anyExpressionIncludesApplication ()
 
-                        OnlySingleArguments ->
+                        OnlyWhenSingleArgument ->
                             anyReferenceToOuterDeclaredValue () || anyExpressionIncludesApplication ()
 
                 ( canBeRemoved, mustBeRetained ) =
@@ -222,7 +263,7 @@ errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErro
                         RemoveLambdaWhenNoCallsInApplication ->
                             False
 
-                        OnlySingleArguments ->
+                        OnlyWhenSingleArgument ->
                             List.length arguments > 1
             in
             if List.isEmpty canBeRemoved || tooManyArguments then

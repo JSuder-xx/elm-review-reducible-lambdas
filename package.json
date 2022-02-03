@@ -1,5 +1,6 @@
 {
   "name": "elm-review-reducible-lambdas",
+  "summary": "elm-review rules to reduce lambda functions through eta reduction and other techniques.",
   "scripts": {
     "test": "npm-run-all --print-name --silent --sequential test:make test:format test:run test:review test:package",
     "test:make": "elm make --docs=docs.json",
