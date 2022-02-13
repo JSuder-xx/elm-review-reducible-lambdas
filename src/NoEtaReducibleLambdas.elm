@@ -16,6 +16,7 @@ import Elm.Syntax.Expression exposing (Expression(..), FunctionImplementation, L
 import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Range exposing (Range)
+import List.Extra
 import Ra
 import Range.Extra
 import Review.Fix as Fix
@@ -203,6 +204,25 @@ removeParameterAndExpressionFixes ( Node patternRange _, Node expressionRange _ 
     ]
 
 
+removeArrow : { lastArgument : Node a, functionExpression : Node b } -> Fix.Fix
+removeArrow { lastArgument, functionExpression } =
+    let
+        (Node lastArgumentRange _) =
+            lastArgument
+
+        (Node functionExpressionRange _) =
+            functionExpression
+    in
+    if lastArgumentRange.end.row == functionExpressionRange.start.row then
+        Fix.removeRange (Range.Extra.toTheRight { delta = 0, count = 4 } lastArgumentRange)
+
+    else
+        Fix.removeRange
+            { start = { row = lastArgumentRange.end.row, column = lastArgumentRange.end.column }
+            , end = { row = functionExpressionRange.start.row, column = functionExpressionRange.start.column }
+            }
+
+
 errorsInApplicationOfLambda : LambdaReduceStrategy -> Set String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
 errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErrors arguments expressions =
     case expressions of
@@ -297,15 +317,20 @@ errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErro
                             existingErrors
 
                 else
-                    Rule.errorWithFix
-                        canRemoveLambda
-                        range
-                        (Fix.removeRange (functionExpression |> Node.range |> Range.Extra.toTheLeft { delta = 0, count = 4 })
-                            :: List.concatMap
-                                removeParameterAndExpressionFixes
-                                canBeRemoved
-                        )
-                        :: existingErrors
+                    case List.Extra.last arguments of
+                        Just lastArgument ->
+                            Rule.errorWithFix
+                                canRemoveLambda
+                                range
+                                (removeArrow { lastArgument = lastArgument, functionExpression = functionExpression }
+                                    :: List.concatMap
+                                        removeParameterAndExpressionFixes
+                                        canBeRemoved
+                                )
+                                :: existingErrors
+
+                        _ ->
+                            existingErrors
 
             else
                 Rule.errorWithFix

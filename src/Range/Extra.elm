@@ -1,4 +1,4 @@
-module Range.Extra exposing (expandToLeft, expandToRight, toTheLeft)
+module Range.Extra exposing (expandToLeft, expandToRight, toTheLeft, toTheRight)
 
 import Elm.Syntax.Range as Range exposing (Range)
 
@@ -31,10 +31,27 @@ toTheLeft { delta, count } { start, end } =
     in
     { end =
         { row = end.row
-        , column = start.column - delta
+        , column = endColumn
         }
     , start =
         { row = start.row
         , column = endColumn - count
+        }
+    }
+
+
+toTheRight : { delta : Int, count : Int } -> Range -> Range
+toTheRight { delta, count } { start, end } =
+    let
+        startColumn =
+            end.column + delta
+    in
+    { start =
+        { row = start.row
+        , column = startColumn
+        }
+    , end =
+        { row = end.row
+        , column = startColumn + count
         }
     }

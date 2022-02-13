@@ -124,6 +124,60 @@ all =
                                 ]
                             }
                         )
+                , [ AlwaysRemoveLambdaWhenPossible, RemoveLambdaWhenNoCallsInApplication ]
+                    |> List.map
+                        (expectCanRemoveLambda
+                            { description = "can reduce to function outright even when the lambda is on two lines"
+                            , source =
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            \\a b ->"
+                                , "                 f a b"
+                                , "    in"
+                                , "    g x y"
+                                ]
+                            }
+                            { under = "\\a b ->\n                 f a b"
+                            , newSource =
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            f"
+                                , "    in"
+                                , "    g x y"
+                                ]
+                            }
+                        )
+                , [ AlwaysRemoveLambdaWhenPossible, RemoveLambdaWhenNoCallsInApplication ]
+                    |> List.map
+                        (expectCanRemoveLambda
+                            { description = "can reduce to function outright even when the lambda is on multiple lines"
+                            , source =
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            \\a b ->"
+                                , "                 f"
+                                , "                     a"
+                                , "                     b"
+                                , "    in"
+                                , "    g x y"
+                                ]
+                            }
+                            { under = "\\a b ->\n                 f\n                     a\n                     b"
+                            , newSource =
+                                [ "f x y ="
+                                , "    let"
+                                , "        g ="
+                                , "            f"
+                                , "                    "
+                                , "                    "
+                                , "    in"
+                                , "    g x y"
+                                ]
+                            }
+                        )
                 , [ OnlyWhenSingleArgument ]
                     |> List.map
                         (expectCanRemoveLambda
