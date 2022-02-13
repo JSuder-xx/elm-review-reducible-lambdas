@@ -28,6 +28,7 @@ import VariableName
 
   - OnlyWhenSingleArgument has the least impact on performance and will reduce the least.
       - This will reduce `\a -> f a` to `f`.
+      - It will not reduce `\a b -> f a b` because there are two arguments.
       - It will not reduce `\a -> (getFunction 10) a` because there is a function application to get the function.
 
   - RemoveLambdaWhenNoCallsInApplication should have minimal impact on performance and reduces most of the functions you would want to reduce.
@@ -174,7 +175,10 @@ canRemoveSomeArguments =
 canRemoveLambda : ErrorMessage
 canRemoveLambda =
     { message = "Lambda can be removed"
-    , details = [ "The meaning of the code remains the same even when the lambda is removed." ]
+    , details =
+        [ "The meaning of the code remains the same even when the lambda is removed."
+        , "Performance may be altered depending on the implementation of the function. In cases where the lambda is invoked many times this is likely to be a performance increase. In cases where the lambda is often never invoked (ex. mapping over a Maybe) this could decrease performance."
+        ]
     }
 
 
@@ -183,7 +187,7 @@ canRemoveLambda =
 reducesToIdentity : ErrorMessage
 reducesToIdentity =
     { message = "This lambda is actually reducible to just the identity function."
-    , details = [ "After eta reduction this function finally reduced down to something of the form `\\a -> a`." ]
+    , details = [ "After eta reduction this function finally reduced down to something of the form `\\a -> a` and that is the `identity` function." ]
     }
 
 
