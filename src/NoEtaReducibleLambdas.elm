@@ -122,9 +122,23 @@ This rule can change the performance characteristics of your program which is wh
     import NoEtaReducibleLambdas
     import Review.Rule exposing (Rule)
 
+
+    -- Below is an example of the strongest configuration. It will reduce the most.
     config : List Rule
     config =
-        [ NoEtaReducibleLambdas.rule NoEtaReducibleLambdas.AlwaysRemoveLambdaWhenPossible
+        [ NoEtaReducibleLambdas.rule
+            { lambdaReduceStrategy = NoEtaReducibleLambdas.AlwaysRemoveLambdaWhenPossible
+            , argumentNamePredicate = always True
+            }
+        ]
+
+    -- Conservative configuration: Only reduces single argument lambdas with a single letter argument name.
+    conservativeConfig : List Rule
+    conservativeConfig =
+        [ NoEtaReducibleLambdas.rule
+            { lambdaReduceStrategy = NoEtaReducibleLambdas.OnlyWhenSingleArgument
+            , argumentNamePredicate = \argumentName -> String.length argumentName <= 1
+            }
         ]
 
 

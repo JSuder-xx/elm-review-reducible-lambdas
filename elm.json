@@ -3,7 +3,7 @@
     "name": "jsuder-xx/elm-review-reducible-lambdas",
     "summary": "elm-review rules to reduce lambda functions through eta reduction.",
     "license": "BSD-3-Clause",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "exposed-modules": [
         "NoEtaReducibleLambdas"
     ],
