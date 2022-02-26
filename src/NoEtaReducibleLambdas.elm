@@ -1,11 +1,11 @@
 module NoEtaReducibleLambdas exposing
-    ( rule, LambdaReduceStrategy(..)
+    ( rule, LambdaReduceStrategy(..), Config
     , canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
     )
 
 {-| Provides [`elm-review`](https://package.elm-lang.org/packages/jfmengels/elm-review/latest/) rules to detect reducible lambda expressions using different techniques.
 
-@docs rule, LambdaReduceStrategy
+@docs rule, LambdaReduceStrategy, Config
 @docs canRemoveLambda, canRemoveSomeArguments, reducesToIdentity
 
 -}
@@ -17,6 +17,7 @@ import Elm.Syntax.Node as Node exposing (Node(..))
 import Elm.Syntax.Pattern exposing (Pattern(..))
 import Elm.Syntax.Range exposing (Range)
 import List.Extra
+import Node.Extra
 import Ra
 import Range.Extra
 import Review.Fix as Fix
@@ -25,7 +26,21 @@ import Set exposing (Set)
 import VariableName
 
 
-{-| Use these to control how aggressively lambda expressions are reduced.
+{-| Configuration options for determining under what circumstances this rule will perform a reduction.
+
+  - argumentNamePredicate can be used to do things like
+      - restrict reduction to only single letter argument names ex. `\argumentName -> String.length argumentName == 1`.
+      - if you do not wish to restrict then assign `always True`.
+  - lambdaReduceStrategy considers the impact on evaluation. See the documentation for that type.
+
+-}
+type alias Config =
+    { argumentNamePredicate : String -> Bool
+    , lambdaReduceStrategy : LambdaReduceStrategy
+    }
+
+
+{-| Control how aggressively lambda expressions are reduced.
 
   - OnlyWhenSingleArgument has the least impact on performance and will reduce the least.
       - This will reduce `\a -> f a` to `f`.
@@ -122,10 +137,10 @@ elm-review --template jsuder-xx/elm-review-eta-reduction/example --rules NoEtaRe
 ```
 
 -}
-rule : LambdaReduceStrategy -> Rule
-rule strategy =
+rule : Config -> Rule
+rule config =
     Rule.newModuleRuleSchema "NoEtaReducibleLambdas" ()
-        |> Rule.withDeclarationEnterVisitor (\decl context -> ( errorsInDeclaration strategy decl, context ))
+        |> Rule.withDeclarationEnterVisitor (\decl context -> ( errorsInDeclaration config decl, context ))
         |> Rule.fromModuleRuleSchema
 
 
@@ -223,20 +238,23 @@ removeArrow { lastArgument, functionExpression } =
             }
 
 
-errorsInApplicationOfLambda : LambdaReduceStrategy -> Set String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
-errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErrors arguments expressions =
+errorsInApplicationOfLambda : Config -> Set String -> Range -> Errors -> List (Node Pattern) -> List (Node Expression) -> List (Rule.Error {})
+errorsInApplicationOfLambda { lambdaReduceStrategy, argumentNamePredicate } valueNameSet range existingErrors arguments expressions =
     case expressions of
         [] ->
             []
 
         functionExpression :: _ ->
             let
-                variableCounts =
+                variableCountsInExpression =
                     VariableName.countInExpressions (nodeValues expressions) Dict.empty
 
-                countOf name =
-                    Dict.get name variableCounts
+                countOfVariableInExpression name =
+                    Dict.get name variableCountsInExpression
                         |> Maybe.withDefault 0
+
+                occursOnceInExpression =
+                    Node.value >> countOfVariableInExpression >> Ra.lessThanEqualTo 1
 
                 ( removable, retainable ) =
                     List.map2
@@ -246,7 +264,11 @@ errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErro
                         |> Ra.partitionWhile
                             (\( argumentPattern, expression ) ->
                                 Maybe.map2
-                                    (\argumentName variableName -> Node.value argumentName == Node.value variableName && countOf (Node.value variableName) <= 1)
+                                    (\argumentNode variableNode ->
+                                        Node.Extra.equals argumentNode variableNode
+                                            && occursOnceInExpression variableNode
+                                            && (argumentNode |> Node.value |> argumentNamePredicate)
+                                    )
                                     (varPattern argumentPattern)
                                     (VariableName.fromExpression expression)
                                     |> Maybe.withDefault False
@@ -255,7 +277,7 @@ errorsInApplicationOfLambda lambdaReduceStrategy valueNameSet range existingErro
                 anyReferenceToOuterDeclaredValue _ =
                     valueNameSet
                         |> Set.toList
-                        |> List.any (countOf >> Ra.greaterThan 0)
+                        |> List.any (countOfVariableInExpression >> Ra.greaterThan 0)
 
                 anyExpressionIncludesApplication _ =
                     expressions |> List.any expessionIncludesApplicationNotBehindLambda
@@ -455,14 +477,14 @@ expessionIncludesApplicationNotBehindLambda expr =
             expessionIncludesApplicationNotBehindLambda e
 
 
-errorsInExpression : LambdaReduceStrategy -> Set.Set String -> Errors -> Node Expression -> Errors
-errorsInExpression lambdaReduceStrategy valueNameSet initialErrors =
+errorsInExpression : Config -> Set.Set String -> Errors -> Node Expression -> Errors
+errorsInExpression config valueNameSet initialErrors =
     let
         letDeclaration : Node LetDeclaration -> Errors -> Errors
         letDeclaration decl accumulatedErrors =
             case Node.value decl of
                 LetFunction { declaration } ->
-                    errorsInFunctionImplementation lambdaReduceStrategy valueNameSet declaration accumulatedErrors
+                    errorsInFunctionImplementation config valueNameSet declaration accumulatedErrors
 
                 LetDestructuring _ expr ->
                     expressionRecurse accumulatedErrors expr
@@ -564,7 +586,7 @@ errorsInExpression lambdaReduceStrategy valueNameSet initialErrors =
                             |> Maybe.map
                                 (\applications ->
                                     errorsInApplicationOfLambda
-                                        lambdaReduceStrategy
+                                        config
                                         valueNameSet
                                         (Node.range expr)
                                         accumulatedErrors
@@ -578,14 +600,14 @@ errorsInExpression lambdaReduceStrategy valueNameSet initialErrors =
     expressionRecurse initialErrors
 
 
-errorsInFunctionImplementation : LambdaReduceStrategy -> Set String -> Node FunctionImplementation -> Errors -> Errors
-errorsInFunctionImplementation lambdaReduceStrategy valueNameSet declaration accumulatedErrors =
+errorsInFunctionImplementation : Config -> Set String -> Node FunctionImplementation -> Errors -> Errors
+errorsInFunctionImplementation config valueNameSet declaration accumulatedErrors =
     let
         { name, expression, arguments } =
             Node.value declaration
     in
     errorsInExpression
-        lambdaReduceStrategy
+        config
         ((if List.isEmpty arguments then
             name |> Node.value |> Set.insert
 
@@ -598,14 +620,14 @@ errorsInFunctionImplementation lambdaReduceStrategy valueNameSet declaration acc
         expression
 
 
-errorsInDeclaration : LambdaReduceStrategy -> Node Declaration -> Errors
-errorsInDeclaration lambdaReduceStrategy (Node _ decl) =
+errorsInDeclaration : Config -> Node Declaration -> Errors
+errorsInDeclaration config (Node _ decl) =
     case decl of
         CustomTypeDeclaration _ ->
             []
 
         FunctionDeclaration { declaration } ->
-            errorsInFunctionImplementation lambdaReduceStrategy Set.empty declaration []
+            errorsInFunctionImplementation config Set.empty declaration []
 
         AliasDeclaration _ ->
             []

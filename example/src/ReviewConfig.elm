@@ -13,5 +13,8 @@ import Review.Rule exposing (Rule)
 
 config : List Rule
 config =
-    [ NoEtaReducibleLambdas.rule NoEtaReducibleLambdas.RemoveLambdaWhenNoCallsInApplication
+    [ NoEtaReducibleLambdas.rule
+        { lambdaReduceStrategy = NoEtaReducibleLambdas.RemoveLambdaWhenNoCallsInApplication
+        , argumentNamePredicate = always True
+        }
     ]
